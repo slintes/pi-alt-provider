@@ -1,0 +1,25 @@
+{
+  "providers": [
+    {
+      "name": "openai-proxy",
+      "originalProvider": "openai",
+      "overrides": {
+        "baseUrl": "https://proxy.example.com/v1"
+      }
+    },
+    {
+      "name": "anthropic-proxy",
+      "originalProvider": "anthropic",
+      "overrides": {
+        "baseUrl": "$ANTHROPIC_PROXY_BASE_URL",
+        "apiKey": "$ANTHROPIC_PROXY_API_KEY",
+        "compat": {
+          "supportsMidConvoEffort": false
+        },
+        "headers": {
+          "X-Proxy-Token": "${PROXY_TOKEN}"
+        }
+      }
+    }
+  ]
+}

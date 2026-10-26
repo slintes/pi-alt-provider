@@ -1,0 +1,26 @@
+{
+  "name": "pi-alt-provider",
+  "version": "0.1.0",
+  "description": "Pi extension for providers that inherit an existing provider and override selected settings.",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/slintes/pi-alt-provider.git" },
+  "keywords": ["pi-package"],
+  "engines": { "node": ">=22.19.0" },
+  "pi": { "extensions": ["./index.ts"] },
+  "files": ["index.ts", "config.example.json", "README.md"],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
+  }
+}
