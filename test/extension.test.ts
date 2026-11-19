@@ -570,29 +570,74 @@ test("factory reads agent-directory config, ignores package-local files, and is 
   await assert.rejects(extension(pi), (error: Error) => !error.message.includes("secret-value") && error.message.includes("altprovider.json is not valid JSON"));
 });
 
+// The npm bin is the bundled build, which serves pi-ai to extensions as virtual modules.
+const piClis = ["./cli.js", "./bundle/cli.js"]
+  .map((path) => fileURLToPath(new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent"))));
+
 test("Pi CLI loads altprovider.json from the default and overridden agent directories at startup", async (t) => {
   const { directory } = await fixture(t);
   const extensionDirectory = join(directory, "extension");
   const home = join(directory, "home");
   await mkdir(extensionDirectory);
   await cp(new URL("../index.ts", import.meta.url), join(extensionDirectory, "index.ts"));
-  const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
-  for (const [agentDir, name] of [[directory, "startup-proxy"], [join(home, ".pi", "agent"), "home-proxy"]]) {
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "altprovider.json"), JSON.stringify({ providers: [{
-      name, originalProvider: "openai", overrides: { baseUrl: "${PI_ALT_TEST_CLI_ORIGIN}/v1", apiKey: "dummy-proxy-key", compat: { supportsMidConvoEffort: false } },
-    }] }));
-    if (agentDir !== directory) await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: {
-      [name]: { modelOverrides: { "gpt-4.1": { name: "Startup GPT" } } },
-    } }));
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, OPENAI_API_KEY: "", PI_ALT_TEST_CLI_ORIGIN: "https://proxy.invalid" };
-    if (agentDir === directory) env.PI_CODING_AGENT_DIR = agentDir;
-    else delete env.PI_CODING_AGENT_DIR;
-    const { stdout, stderr } = await promisify(execFile)(process.execPath, [cli,
-      "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
-      "-e", join(extensionDirectory, "index.ts"), "--list-models", name,
-    ], { cwd: extensionDirectory, env, timeout: 30_000 });
-    assert.match(stdout, new RegExp(`^${name}\\s+`, "m"), stderr);
-    assert.doesNotMatch(stderr, /Failed to load|Error loading|register_provider/);
+  for (const cli of piClis) {
+    for (const [agentDir, name] of [[directory, "startup-proxy"], [join(home, ".pi", "agent"), "home-proxy"]]) {
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(join(agentDir, "altprovider.json"), JSON.stringify({ providers: [{
+        name, originalProvider: "openai", overrides: { baseUrl: "${PI_ALT_TEST_CLI_ORIGIN}/v1", apiKey: "dummy-proxy-key", compat: { supportsMidConvoEffort: false } },
+      }] }));
+      if (agentDir !== directory) await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: {
+        [name]: { modelOverrides: { "gpt-4.1": { name: "Startup GPT" } } },
+      } }));
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, OPENAI_API_KEY: "", PI_ALT_TEST_CLI_ORIGIN: "https://proxy.invalid" };
+      if (agentDir === directory) env.PI_CODING_AGENT_DIR = agentDir;
+      else delete env.PI_CODING_AGENT_DIR;
+      const { stdout, stderr } = await promisify(execFile)(process.execPath, [cli,
+        "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
+        "-e", join(extensionDirectory, "index.ts"), "--list-models", name,
+      ], { cwd: extensionDirectory, env, timeout: 30_000 });
+      assert.match(stdout, new RegExp(`^${name}\\s+`, "m"), `${cli}: ${stderr}`);
+      assert.doesNotMatch(stderr, /Failed to load|Error loading|register_provider/);
+    }
   }
+});
+
+// Bundled Pi reporting version 1.2.3 from a package directory that holds no pi-ai, or a fake pi-ai
+// of the given version.
+async function listWithIsolatedPi(t: TestContext, overrides: Record<string, unknown>, fakePiAiVersion?: string) {
+  const { directory } = await fixture(t);
+  const extensionDirectory = join(directory, "extension");
+  const packageDirectory = join(directory, "pi-package");
+  await mkdir(extensionDirectory);
+  await cp(new URL("../index.ts", import.meta.url), join(extensionDirectory, "index.ts"));
+  await mkdir(packageDirectory);
+  await writeFile(join(packageDirectory, "package.json"), '{"name":"pi-package","version":"1.2.3"}');
+  if (fakePiAiVersion) {
+    const piAi = join(packageDirectory, "node_modules", "@earendil-works", "pi-ai");
+    await mkdir(join(piAi, "dist", "providers"), { recursive: true });
+    await writeFile(join(piAi, "package.json"), JSON.stringify({
+      name: "@earendil-works/pi-ai", version: fakePiAiVersion, exports: { "./providers/*": "./dist/providers/*.js" },
+    }));
+    await writeFile(join(piAi, "dist", "providers", "all.js"), "");
+    await writeFile(join(piAi, "dist", "providers", "compat-schema.js"), 'exports.ProviderCompatSchema = { type: "object" };');
+  }
+  await writeFile(join(directory, "altprovider.json"), JSON.stringify({ providers: [{
+    name: "isolated-proxy", originalProvider: "openai", overrides: { baseUrl: "https://proxy.invalid/v1", apiKey: "dummy-proxy-key", ...overrides },
+  }] }));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: directory, USERPROFILE: directory, OPENAI_API_KEY: "",
+    PI_CODING_AGENT_DIR: directory, PI_PACKAGE_DIR: packageDirectory };
+  return promisify(execFile)(process.execPath, [piClis[1],
+    "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
+    "-e", join(extensionDirectory, "index.ts"), "--list-models", "isolated-proxy",
+  ], { cwd: extensionDirectory, env, timeout: 30_000 });
+}
+
+test("bundled Pi CLI loads the extension without any pi-ai on disk when no entry uses compat", async (t) => {
+  const { stdout, stderr } = await listWithIsolatedPi(t, {});
+  assert.match(stdout, /^isolated-proxy\s+/m, stderr);
+});
+
+test("bundled Pi CLI rejects a pi-ai copy whose version differs from Pi's", async (t) => {
+  const { stdout, stderr } = await listWithIsolatedPi(t, { compat: { supportsMidConvoEffort: false } }, "1.2.4");
+  assert.doesNotMatch(stdout, /^isolated-proxy\s+/m, stderr);
 });

@@ -1,6 +1,8 @@
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   isModelType,
   lazyStream,
@@ -17,21 +19,58 @@ import {
   type Static,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { getAgentDir, ModelRuntime, readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, getPackageDir, ModelRuntime, readStoredCredential, VERSION, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 
-// Resolve beside Pi's mapped provider entry; its loader aliases other pi-ai subpaths.
-const { ProviderCompatSchema } = createRequire(import.meta.resolve("@earendil-works/pi-ai/providers/all"))(
-  "./compat-schema.js",
-) as typeof import("@earendil-works/pi-ai/providers/compat-schema");
-const validateCompat = Compile(ProviderCompatSchema);
+// Version of the pi-ai package containing the entry, from the nearest package.json with a name.
+function piAiVersion(entry: string): string | undefined {
+  for (let dir = dirname(fileURLToPath(entry)); dir !== dirname(dir); dir = dirname(dir)) {
+    const file = join(dir, "package.json");
+    if (!existsSync(file)) continue;
+    const pkg = JSON.parse(readFileSync(file, "utf8")) as { name?: string; version?: string };
+    if (pkg.name !== undefined) return pkg.name === "@earendil-works/pi-ai" ? pkg.version : undefined;
+  }
+  return undefined;
+}
+
+// npm-installed Pi runs its bundled build, which serves pi-ai to extensions as virtual modules
+// that import.meta.resolve ignores. Resolve from Pi's package directory first, and accept only
+// the pi-ai version Pi pins, so compat is never checked against another copy's schema.
+function providersEntry(): string {
+  const errors: unknown[] = [];
+  for (const parent of [pathToFileURL(join(resolve(getPackageDir()), "package.json")).href, import.meta.url]) {
+    try {
+      const entry = import.meta.resolve("@earendil-works/pi-ai/providers/all", parent);
+      const version = piAiVersion(entry);
+      if (version === VERSION) return entry;
+      errors.push(new Error(`${fileURLToPath(entry)} belongs to pi-ai ${version ?? "of unknown version"}`));
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const details = errors.map((error) => (error instanceof Error ? error.message : String(error)).split("\n")[0]).join("; ");
+  throw new AggregateError(errors, `pi-alt-provider: cannot find pi-ai ${VERSION} to validate compat settings (${details})`);
+}
+
+type CompatSchemaModule = typeof import("@earendil-works/pi-ai/providers/compat-schema");
+
+let compatValidator: { Check(value: unknown): boolean } | undefined;
+// Load the schema only when a config uses compat, so other configs work wherever Pi runs.
+function isValidCompat(value: unknown): boolean {
+  if (!compatValidator) {
+    // Resolve beside Pi's provider entry; Pi's loader maps only some pi-ai subpaths.
+    const { ProviderCompatSchema } = createRequire(providersEntry())("./compat-schema.js") as CompatSchemaModule;
+    compatValidator = Compile(ProviderCompatSchema);
+  }
+  return compatValidator.Check(value);
+}
 
 interface Overrides {
   name?: string;
   baseUrl?: string;
   apiKey?: string;
   headers?: ProviderHeaders;
-  compat?: Static<typeof ProviderCompatSchema>;
+  compat?: Static<CompatSchemaModule["ProviderCompatSchema"]>;
 }
 
 export interface ProviderDefinition {
@@ -121,7 +160,7 @@ export function parseConfig(value: unknown): ProviderDefinition[] {
         }
       }
     }
-    if (overrides.compat !== undefined && !validateCompat.Check(overrides.compat)) {
+    if (overrides.compat !== undefined && !isValidCompat(overrides.compat)) {
       throw new Error(`${location}: overrides.compat must be a valid compatibility object`);
     }
     return { name, originalProvider: entry.originalProvider as string, overrides: overrides as Overrides };
