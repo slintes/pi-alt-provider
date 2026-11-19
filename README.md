@@ -110,6 +110,8 @@ If Vertex AI rejects `structured_outputs` under `vertexai.allowedPartnerModelFea
 
 No `models.json` entry is needed for these settings. Pi's optional `models.json` metadata overlays still work and apply after the alternative's settings. Use `/reload` after changing the configuration.
 
+The compatibility schema comes from the `@earendil-works/pi-ai` copy installed with Pi and is loaded only when an entry uses `compat`. If that copy is missing or its version differs from Pi's, configurations with `compat` fail with an error that lists what was found; configurations without `compat` are unaffected.
+
 ## Load
 
 Install directly from GitHub:
