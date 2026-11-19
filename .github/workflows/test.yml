@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name == 'push' || github.event.pull_request.author_association == 'CONTRIBUTOR'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
